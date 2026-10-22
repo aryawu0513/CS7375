@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tangram figure task</title>
+<style>
+:root { --bg:#eef1f4; --panel:#fff; --ink:#1d2430; --muted:#6b7584; --line:#d5dbe2;
+        --accent:#2f5d8a; --mine:#dde8f3; --theirs:#f1f3f6; --ok:#2e7d4f; --warn:#b5651d; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#151a21; --panel:#1e252e; --ink:#e4e8ee; --muted:#93a0b0; --line:#323b47;
+          --accent:#7fb0de; --mine:#24384d; --theirs:#262e38; --ok:#6cc08d; --warn:#e0a060; }
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.45 system-ui, sans-serif; }
+header { padding:12px 20px; display:flex; gap:16px; align-items:baseline; border-bottom:1px solid var(--line); }
+header h1 { font-size:17px; margin:0; font-weight:600; }
+header span { color:var(--muted); }
+main { display:grid; grid-template-columns: 1fr 360px; gap:16px; padding:16px 20px; height:calc(100vh - 50px); }
+@media (max-width: 900px) { main { grid-template-columns:1fr; height:auto; } }
+.panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px; overflow:auto; }
+h2 { font-size:14px; margin:0 0 10px; color:var(--muted); font-weight:500; }
+.grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(104px, 1fr)); gap:8px; margin-bottom:18px; }
+.cell { border:1px solid var(--line); border-radius:6px; padding:4px; text-align:center; color:var(--ink);
+        background:none; font:inherit; min-height:130px; position:relative; }
+.cell svg { width:100%; height:auto; display:block; }
+.cell .n { font-size:12px; color:var(--muted); }
+button.cell { cursor:pointer; }
+button.cell:hover { border-color:var(--accent); }
+button.cell:focus-visible, button:focus-visible, input:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.used { opacity:.25; }
+/* compact: used by the dev view's side-by-side panes. Keeps board and chat
+   side by side at any width and sizes figures so the matcher's 6 rows of
+   figures (3x4 slots + 3x4 to place) fit the pane height without scrolling. */
+body.compact header { padding:4px 10px; height:30px; }
+body.compact header h1 { font-size:14px; }
+body.compact main { grid-template-columns:minmax(0, 1fr) 230px; height:calc(100vh - 30px); padding:6px; gap:6px; }
+body.compact .panel { padding:8px; }
+body.compact h2 { font-size:12px; margin:0 0 4px; }
+body.compact .grid { grid-template-columns:repeat(4, minmax(0, 1fr)); gap:3px; margin-bottom:6px; }
+body.compact .cell { min-height:0; padding:1px; }
+body.compact .cell .n { font-size:10px; line-height:1.1; }
+body.compact { --fig:clamp(24px, calc((100vh - 230px) / 6 - 18px), 90px); }
+body.compact .cell svg { height:var(--fig); }
+body.compact .cell.empty { min-height:calc(var(--fig) + 16px); }
+body.compact form input { min-width:0; padding:6px; }
+body.compact .btn { padding:5px 10px; }
+body.compact #results { font-size:11px; }
+.empty { border-style:dashed; }
+#chat { display:flex; flex-direction:column; }
+#log { flex:1; overflow:auto; display:flex; flex-direction:column; gap:6px; margin-bottom:10px; min-height:200px; }
+.m { padding:7px 10px; border-radius:8px; max-width:85%; }
+.m.mine { background:var(--mine); align-self:flex-end; }
+.m.theirs { background:var(--theirs); align-self:flex-start; }
+.m .ex { font-size:12px; color:var(--muted); margin-top:4px; border-top:1px solid var(--line); padding-top:4px; }
+.m .ex ul { margin:2px 0 0; padding-left:16px; }
+.m .ex details summary { cursor:pointer; }
+.m .ex .cot { white-space:pre-wrap; margin-top:3px; }
+.low { text-decoration:underline wavy var(--warn); text-underline-offset:3px; }
+.m.flash { outline:2px solid var(--accent); }
+.m.pending { opacity:.7; font-style:italic; }
+.ref { color:var(--accent); cursor:pointer; text-decoration:underline; background:none; border:0; padding:0; font:inherit; }
+.rnd { font-size:12px; color:var(--muted); text-align:center; }
+form { display:flex; gap:6px; }
+input { flex:1; padding:8px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--ink); font:inherit; }
+.btn { padding:8px 14px; border:0; border-radius:6px; background:var(--accent); color:var(--panel); font:inherit; cursor:pointer; }
+.btn:disabled { opacity:.4; cursor:default; }
+#results { font-size:13px; color:var(--muted); }
+</style>
+</head>
+<body>
+<header><h1>Tangram figure task</h1><span id="status"></span></header>
+<main>
+  <section class="panel" id="board"></section>
+  <section class="panel" id="chat">
+    <div id="log"></div>
+    <form id="f"><input id="t" autocomplete="off" placeholder="Type a message"><button class="btn">Send</button></form>
+  </section>
+</main>
+<script>
+const q = new URLSearchParams(location.search);
+if (q.get("compact")) document.body.classList.add("compact");
+const room = q.get("room") || "tangram-figure", role = q.get("role") || "director", lang = q.get("lang") || "en";
+let S = null, lastMsgCount = -1, lastMsgKey = "", lastBoardKey = "", closedEx = new Set();
+
+const post = (u, b) => fetch(u, {method:"POST", headers:{"Content-Type":"application/json"},
+                                  body:JSON.stringify({room, role, ...b})}).then(r => r.json());
+
+function esc(s) { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; }
+
+function renderBoard() {
+  const b = document.getElementById("board");
+  if (S.done) {
+    b.innerHTML = "<h2>All rounds finished. Thanks!</h2>" + resultsHtml();
+    return;
+  }
+  let h = "";
+  if (role === "director") {
+    h += "<h2>Target order. Describe each figure so your partner can place it.</h2><div class='grid'>";
+    S.target.forEach((fi, pos) => h += `<div class="cell"><div class="n">${pos+1}</div>${S.figures[fi]}</div>`);
+    h += "</div>";
+  } else {
+    const sel = S.selection;
+    h += "<h2>Your order. Click a placed figure to remove it.</h2><div class='grid'>";
+    for (let pos = 0; pos < S.figures.length; pos++) {
+      const fi = sel[pos];
+      h += fi === undefined
+        ? `<div class="cell empty"><div class="n">${pos+1}</div></div>`
+        : `<button class="cell" data-rm="${pos}" aria-label="Remove figure at ${pos+1}"><div class="n">${pos+1}</div>${S.figures[fi]}</button>`;
+    }
+    h += "</div><h2>Figures. Click to place in the next empty position.</h2><div class='grid'>";
+    S.figures.forEach((svg, fi) => {
+      const used = sel.includes(fi);
+      h += `<button class="cell ${used ? "used" : ""}" data-add="${fi}" ${used ? "disabled" : ""} aria-label="Figure">${svg}</button>`;
+    });
+    h += `</div><button class="btn" id="submit" ${sel.length < S.figures.length ? "disabled" : ""}>Submit round</button>`;
+  }
+  b.innerHTML = h + resultsHtml();
+  b.querySelectorAll("[data-add]").forEach(e => e.onclick = () => setSel([...S.selection, +e.dataset.add]));
+  b.querySelectorAll("[data-rm]").forEach(e => e.onclick = () => setSel(S.selection.filter((_, i) => i !== +e.dataset.rm)));
+  const s = document.getElementById("submit");
+  if (s) s.onclick = async () => { await post("/api/submit", {}); poll(); };
+}
+
+function resultsHtml() {
+  if (!S.results.length) return "";
+  return "<div id='results'>" + S.results.map(r =>
+    `Round ${r.round}: ${r.correct}/${r.total} correct, ${r.seconds}s, ${r.n_messages} messages`).join("<br>") + "</div>";
+}
+
+async function setSel(sel) { S.selection = sel; renderBoard(); await post("/api/select", {selection: sel}); }
+
+function renderChat() {
+  const log = document.getElementById("log");
+  let h = "", rnd = 0;
+  for (const m of S.messages) {
+    if (m.round !== rnd) { rnd = m.round; h += `<div class="rnd">Round ${rnd}</div>`; }
+    const ex = m.explain || {};
+    const body = ex.confidence ? confidenceHtml(ex.confidence) : esc(m.text);
+    h += `<div class="m ${m.mine ? "mine" : "theirs"}" id="msg${m.id}">${body}` +
+         (m.back != null ? `<div class="ex">Back-translation: ${esc(m.back)}</div>` : "") +
+         explainHtml(ex) + "</div>";
+  }
+  for (const p of S.pending || []) {
+    const what = p.stage === "translating"
+      ? (p.mine ? "Translating your message…" : "Your partner sent a message. Translating it…")
+      : (p.mine ? "Checking the translation (back-translation)…" : "Your partner sent a message. Almost ready…");
+    h += `<div class="m ${p.mine ? "mine" : "theirs"} pending">${p.mine ? esc(p.text) + "<div class='ex'>" + what + "</div>" : what}</div>`;
+  }
+  log.innerHTML = h;
+  log.querySelectorAll("[data-ref]").forEach(e => e.onclick = () => {
+    const t = document.getElementById("msg" + e.dataset.ref); if (!t) return;
+    t.scrollIntoView({block:"center"}); t.classList.add("flash"); setTimeout(() => t.classList.remove("flash"), 1500);
+  });
+  log.querySelectorAll("details[data-cot]").forEach(d => {
+    const id = d.closest(".m").id;
+    d.open = !closedEx.has(id);  // shown by default; remember if the player collapses it
+    d.ontoggle = () => d.open ? closedEx.delete(id) : closedEx.add(id);
+  });
+  if (S.messages.length !== lastMsgCount) { lastMsgCount = S.messages.length; log.scrollTop = log.scrollHeight; }
+}
+
+// Receiver-side explanations (see explain.py).
+function confidenceHtml(c) {
+  const cjk = w => /[぀-ヿ㐀-鿿豈-﫿]/.test(w);
+  return c.words.map(([w, p], i) => (i && !cjk(w) && !cjk(c.words[i-1][0]) ? " " : "") + (p < c.threshold
+    ? `<span class="low" title="model confidence ${Math.round(p*100)}%">${esc(w)}</span>` : esc(w))).join("");
+}
+
+function explainHtml(ex) {
+  let h = "";
+  if (ex.confidence && ex.confidence.words.some(([, p]) => p < ex.confidence.threshold))
+    h += `<div class="ex">Underlined words: the translator was unsure.</div>`;
+  if (ex.alternatives)
+    h += `<div class="ex">The translator also considered:<ul>${ex.alternatives.alts.map(a => `<li>${esc(a)}</li>`).join("")}</ul></div>`;
+  if (ex.history)
+    h += `<div class="ex">${ex.history.links.map(l => {
+      const ref = `<button class="ref" data-ref="${l.msg_id}">round ${l.round}</button>`;
+      return l.kind === "repeat"
+        ? `Partner reused a term (≈ "${esc(l.gloss)}") from their message in ${ref}: "${esc(l.earlier)}"`
+        : `Partner seems to be using your words from ${ref}: "${esc(l.yours)}"`;
+    }).map(x => `<div>${x}</div>`).join("")}</div>`;
+  if (ex.cot)
+    h += `<div class="ex"><details data-cot><summary>Translator's explanation${ex.cot.done ? "" : " (the translator is still writing it…)"}</summary><div class="cot">${esc(ex.cot.text) || "…"}</div></details></div>`;
+  return h;
+}
+
+async function poll() {
+  const res = await fetch(`/api/state?room=${room}&role=${role}`);
+  if (!res.ok) { document.getElementById("status").textContent = "This game was closed. Reload the page to rejoin."; return; }
+  S = await res.json();
+  document.getElementById("status").textContent =
+    `${role}, ${lang}, round ${Math.min(S.round, S.rounds)} of ${S.rounds}` + (S.partner_joined ? "" : ", waiting for partner");
+  const key = S.game + "|" + S.round + "|" + S.done + "|" + (role === "matcher" ? S.selection.join(",") : "") + "|" + S.results.length;
+  if (key !== lastBoardKey) { lastBoardKey = key; renderBoard(); }
+  // re-render on new messages and when a slow explanation streams in
+  const msgKey = JSON.stringify([S.messages.map(m => [m.id, m.explain && m.explain.cot && m.explain.cot.text.length]), S.pending]);
+  if (msgKey !== lastMsgKey) { lastMsgKey = msgKey; renderChat(); }
+}
+
+document.getElementById("f").onsubmit = async e => {
+  e.preventDefault();
+  const t = document.getElementById("t"); if (!t.value.trim()) return;
+  const v = t.value; t.value = "";
+  await post("/api/msg", {text: v}); poll();
+};
+
+post("/api/join", {lang}).then(() => { poll(); setInterval(poll, 1000); });
+</script>
+</body>
+</html>

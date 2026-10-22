@@ -1,0 +1,40 @@
+{
+  "source": "KiloGram (lil-lab/kilogram) dataset/tangrams-svg; images are for educational and research use only",
+  "default": "classic",
+  "sets": {
+    "classic": {
+      "about": "the 12 tangrams commonly used in prior reference-game studies (Hawkins et al. 2020); all human-like",
+      "ids": [
+        "page-A",
+        "page-B",
+        "page-C",
+        "page-D",
+        "page-E",
+        "page-F",
+        "page-G",
+        "page-H",
+        "page-I",
+        "page-J",
+        "page-K",
+        "page-L"
+      ]
+    },
+    "abstract": {
+      "about": "highest shape-naming divergence in KiloGram's dense set: people rarely agree what these are",
+      "ids": [
+        "page1-129",
+        "page3-85",
+        "page3-136",
+        "page5-64",
+        "page9-46",
+        "page9-27",
+        "page1-128",
+        "page5-28",
+        "page3-182",
+        "page3-128",
+        "page3-35",
+        "page7-105"
+      ]
+    }
+  }
+}

@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tangram figure dev view</title>
+<style>
+:root { --bg:#eef1f4; --panel:#fff; --ink:#1d2430; --muted:#6b7584; --line:#d5dbe2;
+        --accent:#2f5d8a; --ok:#2e7d4f; --bad:#b3261e; --warn:#b5651d; --hl:#fff4d6; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#151a21; --panel:#1e252e; --ink:#e4e8ee; --muted:#93a0b0; --line:#323b47;
+          --accent:#7fb0de; --ok:#6cc08d; --bad:#ef8a80; --warn:#e0a060; --hl:#3a3220; }
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 system-ui, sans-serif; }
+header { padding:10px 16px; display:flex; flex-wrap:wrap; gap:12px; align-items:center; border-bottom:1px solid var(--line); }
+header h1 { font-size:16px; margin:0; font-weight:600; }
+header form { display:flex; gap:6px; align-items:center; }
+header select { padding:5px 7px; border:1px solid var(--line); border-radius:5px; background:var(--panel); color:var(--ink); font:inherit; }
+.btn { padding:5px 12px; border:0; border-radius:5px; background:var(--accent); color:var(--panel); font:inherit; cursor:pointer; }
+#cfg { color:var(--muted); font-size:13px; }
+.players { display:grid; grid-template-columns:1fr 1fr; gap:10px; padding:10px 16px; }
+@media (max-width: 1100px) { .players { grid-template-columns:1fr; } }
+.player h2, section h2 { font-size:13px; margin:0 0 4px; color:var(--muted); font-weight:500; }
+iframe { width:100%; height:78vh; border:1px solid var(--line); border-radius:8px; background:var(--bg); }
+section { margin:0 16px 14px; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; }
+.board { display:grid; grid-template-columns:60px repeat(12, minmax(0, 46px)); gap:3px; align-items:center; overflow-x:auto; }
+.board .lab { font-size:12px; color:var(--muted); }
+.slot { border:1px solid var(--line); border-radius:4px; padding:2px; text-align:center; min-height:40px; font-size:10px; color:var(--muted); }
+.slot svg { width:100%; height:30px; display:block; color:var(--ink); }
+.slot.ok { border:2px solid var(--ok); } .slot.bad { border:2px solid var(--bad); }
+.msg { border-top:1px solid var(--line); padding:8px 0; display:grid; grid-template-columns:150px 1fr; gap:2px 12px; }
+.msg:first-of-type { border-top:0; }
+.msg .meta { grid-row:span 9; font-size:12px; color:var(--muted); }
+.msg .meta b { color:var(--ink); }
+.k { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; margin-top:4px; }
+.v { white-space:pre-wrap; }
+.v.injected { background:var(--hl); }
+.badge { display:inline-block; font-size:11px; padding:0 6px; border-radius:8px; border:1px solid var(--warn); color:var(--warn); margin-left:4px; }
+details summary { cursor:pointer; color:var(--accent); }
+.low { text-decoration:underline wavy var(--warn); text-underline-offset:3px; }
+.empty { color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Tangram figure task: dev view</h1>
+  <form id="f">
+    director <select id="dl" aria-label="Director language"></select>
+    matcher <select id="ml" aria-label="Matcher language"></select>
+    <button class="btn">Load</button>
+  </form>
+  <form id="rf">tangrams <select id="set" aria-label="Tangram set"></select>
+    <button class="btn" type="submit">New game</button></form>
+  <span id="cfg"></span>
+</header>
+<div class="players">
+  <div class="player"><h2 id="dh">Director</h2><iframe id="di" title="Director view"></iframe></div>
+  <div class="player"><h2 id="mh">Matcher</h2><iframe id="mi" title="Matcher view"></iframe></div>
+</div>
+<section><h2>Board: target (top) vs matcher's current selection (bottom)</h2><div class="board" id="board"></div></section>
+<section><h2>Message pipeline (what each side typed, what the MT got and produced, what each side saw)</h2><div id="msgs"></div></section>
+<script>
+// Both players in one page for piloting. Plays both roles through iframes of
+// the normal player page, and reads the full room state from /api/debug.
+const q = new URLSearchParams(location.search);
+const room = q.get("room") || "tangram-figure", dl = q.get("dlang") || "en", ml = q.get("mlang") || "zh";
+const $ = id => document.getElementById(id);
+const opts = (items, cur) => items.map(([v, label]) =>
+  `<option value="${esc(v)}"${v === cur ? " selected" : ""}>${esc(label)}</option>`).join("");
+fetch("/api/meta").then(r => r.json()).then(M => {
+  const ls = Object.entries(M.langs).map(([c, n]) => [c, `${n} (${c})`]);
+  $("dl").innerHTML = opts(ls, dl); $("ml").innerHTML = opts(ls, ml);
+});
+$("f").onsubmit = e => { e.preventDefault();
+  location.search = new URLSearchParams({room, dlang: $("dl").value, mlang: $("ml").value}); };
+// picking a set starts a new game with it; "New game" restarts with the current set
+$("set").onchange = () => $("rf").requestSubmit();
+$("rf").onsubmit = async e => {
+  e.preventDefault();
+  if (!confirm(`Start a new game with the "${$("set").value}" tangrams? Chat and scores are cleared (the log file keeps them).`)) {
+    $("set").value = setNow; return;
+  }
+  await fetch("/api/reset", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({room, set: $("set").value})});
+  figures = null; last = ""; $("di").contentWindow.location.reload(); $("mi").contentWindow.location.reload();
+};
+$("dh").textContent = `Director (${dl})`; $("mh").textContent = `Matcher (${ml})`;
+// director joins first so the matcher's translations have a target language
+$("di").src = `/?room=${encodeURIComponent(room)}&role=director&lang=${dl}&compact=1`;
+setTimeout(() => $("mi").src = `/?room=${encodeURIComponent(room)}&role=matcher&lang=${ml}&compact=1`, 400);
+
+function esc(s) { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; }
+let figures = null, last = "", closed = new Set(), setNow = null;
+
+function renderBoard(D) {
+  if (!figures) return;
+  const fig = i => i === undefined ? "" : figures[i];
+  let h = `<div class="lab">target</div>` + D.target.map((fi, p) => `<div class="slot">${p+1}${fig(fi)}</div>`).join("");
+  h += `<div class="lab">matcher</div>` + D.target.map((fi, p) => {
+    const s = D.selection[p];
+    return `<div class="slot ${s === undefined ? "" : s === fi ? "ok" : "bad"}">${p+1}${fig(s)}</div>`;
+  }).join("");
+  $("board").innerHTML = h;
+}
+
+function explainHtml(ex) {
+  let h = "";
+  for (const [mode, e] of Object.entries(ex || {})) {
+    if (!e) { h += `<div class="empty">${mode}: (nothing)</div>`; continue; }
+    if (mode === "cot") h += `<details data-k="cot"><summary>translator's reasoning (CoT)${e.done ? "" : " (still writing…)"}</summary><div class="v">${esc(e.text)}</div></details>`;
+    else if (mode === "confidence") h += `<div>confidence: ${e.words.map(([w, p]) =>
+      p < e.threshold ? `<span class="low" title="${Math.round(p*100)}%">${esc(w)}</span>` : esc(w)).join(" ")}</div>`;
+    else if (mode === "alternatives") h += `<div>alternatives: ${e.alts.map(esc).join(" | ")}</div>`;
+    else if (mode === "history") h += `<div>history: ${e.links.map(l => l.kind === "repeat"
+      ? `repeat of #${l.msg_id} (gloss "${esc(l.gloss)}")` : `echo of #${l.msg_id} ("${esc(l.yours)}")`).join("; ")}</div>`;
+  }
+  return h || `<span class="empty">none</span>`;
+}
+
+function renderMsgs(D) {
+  if (!D.messages.length) { $("msgs").innerHTML = `<span class="empty">No messages yet.</span>`; return; }
+  $("msgs").innerHTML = D.messages.slice().reverse().map(m => {
+    const inj = m.injected ? `<span class="badge">injected: ${esc(m.injected[0])} → ${esc(m.injected[1])}</span>` : "";
+    return `<div class="msg" data-id="${m.id}">
+      <div class="meta"><b>#${m.id}</b> · round ${m.round}<br>${m.from} ${m.src}→${m.tgt}<br>${m.latency ?? "?"}s</div>
+      <div class="k">${m.from} typed</div><div class="v">${esc(m.orig)}</div>
+      ${m.mt_input !== m.orig ? `<div class="k">MT input ${inj}</div><div class="v injected">${esc(m.mt_input)}</div>` : ""}
+      <div class="k">receiver sees</div><div class="v">${esc(m.shown)}</div>
+      ${m.back != null ? `<div class="k">sender's back-translation</div><div class="v">${esc(m.back)}</div>` : ""}
+      ${m.alts && m.alts.length && !(m.explain || {}).alternatives ? `<div class="k">other beams (not shown)</div><div class="v">${m.alts.map(esc).join(" | ")}</div>` : ""}
+      <div class="k">receiver explanations</div><div>${explainHtml(m.explain)}</div>
+    </div>`;
+  }).join("");
+  // keep expanded <details> open across re-renders
+  document.querySelectorAll(".msg").forEach(el => el.querySelectorAll("details").forEach(d => {
+    const key = el.dataset.id + d.dataset.k;
+    d.open = !closed.has(key);
+    d.ontoggle = () => d.open ? closed.delete(key) : closed.add(key);
+  }));
+}
+
+async function poll() {
+  try {
+    const dres = await fetch(`/api/debug?room=${encodeURIComponent(room)}`);
+    if (dres.status === 404) { $("cfg").textContent = "waiting for the players to join…"; return; }
+    const D = await dres.json();
+    if (!figures) figures = (await fetch(`/api/state?room=${encodeURIComponent(room)}&role=director`).then(r => r.json())).figures;
+    const c = D.config;
+    if (!$("set").options.length) $("set").innerHTML = D.sets.map(s => `<option${s === c.set ? " selected" : ""}>${s}</option>`).join("");
+    setNow = c.set;
+    $("cfg").textContent = `set ${c.set} · model ${c.model} · explain ${c.explain.join(",") || "none"} · sender back-translation ${c.sender_bt ? "on" : "off"} · inject ${c.inject} · round ${Math.min(D.round, D.rounds)}/${D.rounds}` +
+      (D.results.length ? " · scores " + D.results.map(r => `${r.correct}/${r.total}`).join(", ") : "");
+    const key = JSON.stringify(D);
+    if (key === last) return;
+    last = key; renderBoard(D); renderMsgs(D);
+  } catch (e) { $("cfg").textContent = "server not reachable"; }
+}
+poll(); setInterval(poll, 1500);
+</script>
+</body>
+</html>
