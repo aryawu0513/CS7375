@@ -120,7 +120,7 @@ function explainHtml(ex) {
 function renderMsgs(D) {
   if (!D.messages.length) { $("msgs").innerHTML = `<span class="empty">No messages yet.</span>`; return; }
   $("msgs").innerHTML = D.messages.slice().reverse().map(m => {
-    const inj = m.injected ? `<span class="badge">injected: ${esc(m.injected[0])} → ${esc(m.injected[1])}</span>` : "";
+    const inj = m.injected ? `<span class="badge">deliberate error: ${esc(m.injected[0])} → ${esc(m.injected[1])}</span>` : "";
     return `<div class="msg" data-id="${m.id}">
       <div class="meta"><b>#${m.id}</b> · round ${m.round}<br>${m.from} ${m.src}→${m.tgt}<br>${m.latency ?? "?"}s</div>
       <div class="k">${m.from} typed</div><div class="v">${esc(m.orig)}</div>
@@ -148,7 +148,7 @@ async function poll() {
     const c = D.config;
     if (!$("set").options.length) $("set").innerHTML = D.sets.map(s => `<option${s === c.set ? " selected" : ""}>${s}</option>`).join("");
     setNow = c.set;
-    $("cfg").textContent = `set ${c.set} · model ${c.model} · explain ${c.explain.join(",") || "none"} · sender back-translation ${c.sender_bt ? "on" : "off"} · inject ${c.inject} · round ${Math.min(D.round, D.rounds)}/${D.rounds}` +
+    $("cfg").textContent = `set ${c.set} · model ${c.model} · explanations ${c.explain.join(", ") || "none"} · error rate ${c.error_rate} · round ${D.round}` +
       (D.results.length ? " · scores " + D.results.map(r => `${r.correct}/${r.total}`).join(", ") : "");
     const key = JSON.stringify(D);
     if (key === last) return;

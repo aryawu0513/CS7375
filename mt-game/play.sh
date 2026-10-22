@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Minimum setup: tangram-figure task with the Seed-X reasoning translator in the middle.
-#   receiver sees the translation + the model's rationale (--explain cot)
-#   sender sees a back-translation of what the receiver got (--sender-bt)
+#   receiver sees the translation + the model's reasoning (--explain cot)
+#   add more explanations with --explain, e.g. ./play.sh --explain cot,backtranslation
 #
 #   ./play.sh                # GPU 0, port 8000
 #   GPU=1 PORT=8001 ./play.sh
@@ -25,4 +25,4 @@ echo "(change lang= to the player's language: en zh es fr de ja ko)"
 echo "Logs: logs/$ROOM.jsonl"
 
 CUDA_VISIBLE_DEVICES=$GPU exec uv run python server.py \
-  --model seed-x --explain cot --sender-bt --set "${SET:-classic}" --port "$PORT" "$@"
+  --model seed-x --explain cot --set "${SET:-classic}" --port "$PORT" "$@"

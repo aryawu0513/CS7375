@@ -90,10 +90,6 @@ function esc(s) { const d = document.createElement("div"); d.textContent = s ?? 
 
 function renderBoard() {
   const b = document.getElementById("board");
-  if (S.done) {
-    b.innerHTML = "<h2>All rounds finished. Thanks!</h2>" + resultsHtml();
-    return;
-  }
   let h = "";
   if (role === "director") {
     h += "<h2>Target order. Describe each figure so your partner can place it.</h2><div class='grid'>";
@@ -124,7 +120,8 @@ function renderBoard() {
 
 function resultsHtml() {
   if (!S.results.length) return "";
-  return "<div id='results'>" + S.results.map(r =>
+  // games have no round limit, so show only the latest rounds
+  return "<div id='results'>" + S.results.slice(-3).reverse().map(r =>
     `Round ${r.round}: ${r.correct}/${r.total} correct, ${r.seconds}s, ${r.n_messages} messages`).join("<br>") + "</div>";
 }
 
@@ -190,8 +187,8 @@ async function poll() {
   if (!res.ok) { document.getElementById("status").textContent = "This game was closed. Reload the page to rejoin."; return; }
   S = await res.json();
   document.getElementById("status").textContent =
-    `${role}, ${lang}, round ${Math.min(S.round, S.rounds)} of ${S.rounds}` + (S.partner_joined ? "" : ", waiting for partner");
-  const key = S.game + "|" + S.round + "|" + S.done + "|" + (role === "matcher" ? S.selection.join(",") : "") + "|" + S.results.length;
+    `${role}, ${lang}, round ${S.round}` + (S.partner_joined ? "" : ", waiting for partner");
+  const key = S.game + "|" + S.round + "|" + (role === "matcher" ? S.selection.join(",") : "") + "|" + S.results.length;
   if (key !== lastBoardKey) { lastBoardKey = key; renderBoard(); }
   // re-render on new messages and when a slow explanation streams in
   const msgKey = JSON.stringify([S.messages.map(m => [m.id, m.explain && m.explain.cot && m.explain.cot.text.length]), S.pending]);

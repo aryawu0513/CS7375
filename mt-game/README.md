@@ -14,18 +14,15 @@ side different explanations of the translation.
 - The **matcher** sees them shuffled, clicks them into slots 1–12, and
   presses **Submit round** when all 12 are placed. Clicking a placed
   figure takes it back out.
-- A session is 4 rounds with the same figures in a new order each round, so
-  the pair can build up shared names ("the kneeling man"). Scores show after
-  each round.
+- After each submit the same figures come back in a new order, with no
+  round limit, so the pair can build up shared names ("the kneeling man").
+  Each round's score shows after it.
 - Each player types in their own language. The receiver sees only the
   translation.
 
-What each side sees besides the translation, in the default setup:
-
-| who | what | why |
-|---|---|---|
-| sender | a **back-translation** of what the partner received | "did my meaning survive?" |
-| receiver | the **translator's reasoning** (chain of thought) under each message | "why did it say this?" |
+In the default setup the receiver also sees the **translator's reasoning**
+(chain of thought) under each message. Other explanations can be switched
+on; see [Settings](#settings).
 
 ## Running it
 
@@ -58,9 +55,8 @@ play both roles to try things out. It also shows:
 - **Board check:** the target order next to the matcher's current
   placements, green where a slot is right and red where it is wrong.
 - **Message pipeline:** for every message, what the sender typed, what the
-  MT model received (highlighted if an error was injected), what the
-  receiver saw, the sender's back-translation, the translator's reasoning,
-  and how long it took.
+  MT model received (highlighted if a deliberate error was added), what the
+  receiver saw, any explanations, and how long it took.
 - **Controls:** language dropdowns for each side (then **Load**), the
   tangram set (`classic` or `abstract`; picking one starts a new game), and
   **New game**.
@@ -70,16 +66,24 @@ The developer view shows the answer, so never give it to participants.
 ## Settings
 
 `play.sh` runs `server.py` with the default setup. Extra flags go at the end,
-e.g. `GPU=1 ./play.sh --inject 0.2`.
+e.g. `GPU=1 ./play.sh --explain cot,backtranslation`.
 
 | flag | meaning |
 |---|---|
 | `--model` | translator: `seed-x` (default in play.sh, can explain itself), `translategemma`, `nllb-600m/1.3b/3.3b`, or `mock` (no model, for testing the UI) |
-| `--explain` | what the receiver sees, comma-separated: `cot` (reasoning), `history` (links to earlier messages that reused the same words), `confidence` (underlines words the model was unsure of), `alternatives` (other translations it considered), `none` |
-| `--sender-bt` | show the sender a back-translation |
-| `--inject P` | with probability P, swap a spatial word (left/right, top/bottom, big/small…) before translating: a deliberate error |
+| `--explain` | which explanations to show, comma-separated (default in play.sh: `cot`). See below. |
+| `--error-rate` | fraction of messages (0–1) that get a deliberate error before translating: a spatial word is swapped (left/right, top/bottom, big/small…). For testing whether people notice wrong translations. Default 0. |
 | `--set` | default tangram set: `classic` or `abstract` |
-| `--rounds` | rounds per game (default 4) |
+
+Explanations (`--explain`):
+
+| name | who sees it | what it shows |
+|---|---|---|
+| `cot` | receiver | the translator's reasoning about its translation (Seed-X only) |
+| `history` | receiver | links to earlier messages that reused the same words |
+| `confidence` | receiver | underlines words the model was unsure of |
+| `alternatives` | receiver | other translations the model considered |
+| `backtranslation` | sender | the translation translated back into the sender's language |
 
 Notes on the models:
 - NLLB's vocabulary is missing common Chinese characters (兔 rabbit, 脖/颈
@@ -104,7 +108,8 @@ not in this repo; `tangrams.py` downloads them into `tangrams/`.
 
 Each game writes `logs/<room>.jsonl`: joins, every message (original, MT
 input, translation, back-translation, word probabilities), each explanation
-as it finishes, every placement, and each round's score and time. The
+as it finishes, every placement, each round's score and time, and any
+deliberate errors. The
 default room is `tangram-figure`.
 
 ## Files
@@ -114,7 +119,7 @@ default room is `tangram-figure`.
 | `server.py` | game server: rooms, rounds, scoring, logging, the message pipeline |
 | `translate.py` | translator backends (Seed-X, TranslateGemma, NLLB, mock) |
 | `explain.py` | receiver-side explanation modes |
-| `inject.py` | deliberate error injection |
+| `inject.py` | deliberate errors (`--error-rate`) |
 | `tangrams.py`, `tangram_set.json` | tangram sets and download |
 | `static/index.html` | the player page |
 | `static/dev.html` | the developer view |

@@ -8,7 +8,7 @@ below give the receiver evidence about what the partner actually wrote.
 
 Each mode: fn(m, room_msgs, mt) -> dict for the UI (or None), where m is the
 message being sent (orig, mt_input, shown, mt, src, tgt, from;
-mt_input differs from orig only when inject.py altered it) and room_msgs are earlier
+mt_input differs from orig only when inject.py added an error) and room_msgs are earlier
 messages.
 
   none         - baseline

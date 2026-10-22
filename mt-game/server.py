@@ -3,7 +3,7 @@
 Director sees the target order; matcher must reproduce it. All chat goes
 through the translator. Everything is logged to logs/<room>.jsonl.
 
-  python server.py --model mock --explain history --sender-bt
+  python server.py --model mock --explain cot,backtranslation
   open http://localhost:8000/?room=tangram-figure&role=director&lang=en
   open http://localhost:8000/?room=tangram-figure&role=matcher&lang=zh
   open http://localhost:8000/dev   (both sides on one page; shows the target)
@@ -21,20 +21,21 @@ p = argparse.ArgumentParser()
 p.add_argument("--model", default="mock", choices=["mock", *MODELS])
 p.add_argument("--device", default=None, help="e.g. cuda:0; default cuda if available")
 p.add_argument("--explain", default="none",
-               help=f"receiver-side modes, comma-separated: {','.join(MODES)}")
-p.add_argument("--sender-bt", action="store_true", help="show the sender a back-translation")
+               help="explanations, comma-separated. For the receiver: "
+                    f"{','.join(x for x in MODES if x != 'none')}. For the sender: backtranslation")
 p.add_argument("--alts", type=int, default=2, help="beam alternatives for --explain alternatives")
-p.add_argument("--inject", type=float, default=0.0,
-               help="probability of an adversarial spatial-word swap per message")
-p.add_argument("--rounds", type=int, default=4)
+p.add_argument("--error-rate", type=float, default=0.0,
+               help="fraction of messages (0-1) given a deliberate error before translation: "
+                    "a spatial word is swapped (left/right, top/bottom...), to test whether people notice")
 p.add_argument("--set", default=tangram_sets()["default"], choices=list(tangram_sets()["sets"]),
                help="tangram set from tangram_set.json")
 p.add_argument("--port", type=int, default=8000)
 p.add_argument("--logdir", default="logs", help="where room logs go (use a scratch dir for tests)")
 args = p.parse_args()
 modes = [x for x in args.explain.split(",") if x != "none"]
+SENDER_MODES = {"backtranslation"}
 for x in modes:
-    if x not in MODES:
+    if x not in MODES and x not in SENDER_MODES:
         p.error(f"unknown explain mode {x}")
 if "cot" in modes and args.model not in ("mock", "seed-x"):
     p.error("--explain cot needs --model seed-x (or mock)")
@@ -111,11 +112,11 @@ def debug():
     r = existing(request.args["room"])
     msgs = [{k: v for k, v in m.items() if k != "mt"} | {"alts": m["mt"]["alts"]}
             for m in r["messages"]]
-    return jsonify(round=r["round"], rounds=args.rounds, langs=r["langs"], target=r["target"],
+    return jsonify(round=r["round"], langs=r["langs"], target=r["target"],
                    selection=r["selection"], results=r["results"], messages=msgs,
                    sets=list(SETS),
                    config=dict(model=args.model, set=r["set"], explain=modes,
-                               sender_bt=args.sender_bt, inject=args.inject))
+                               error_rate=args.error_rate))
 
 
 @app.post("/api/join")
@@ -147,12 +148,9 @@ def state():
     pending = [dict(mine=p["from"] == role, stage=p["stage"],
                     text=p["orig"] if p["from"] == role else None)
                for p in list(r["pending"].values())]
-    n_rounds_done = len(r["results"])
     return jsonify(
         role=role,
         round=r["round"],
-        rounds=args.rounds,
-        done=n_rounds_done >= args.rounds,
         figures=r["figures"],
         target=r["target"] if role == "director" else None,
         selection=r["selection"],
@@ -175,17 +173,17 @@ def msg():
     t0 = time.time()
     r["pending"][role] = dict(orig=text, stage="translating", **{"from": role})
     try:
-        mt_input, injected = maybe_perturb(text, src, args.inject)
+        mt_input, injected = maybe_perturb(text, src, args.error_rate)
         res = mt.translate(mt_input, src, tgt, num_alts=args.alts if "alternatives" in modes else 0)
         r["pending"][role]["stage"] = "back-translating"
-        back = mt.translate(res["text"], tgt, src)["text"] if args.sender_bt else None
+        back = mt.translate(res["text"], tgt, src)["text"] if "backtranslation" in modes else None
     finally:
         r["pending"].pop(role, None)
     m = dict(id=len(r["messages"]), round=r["round"], **{"from": role},
              orig=text, mt_input=mt_input, injected=injected, shown=res["text"],
              back=back, src=src, tgt=tgt, mt=res)
     prev = list(r["messages"])
-    m["explain"] = {x: MODES[x](m, prev, mt) for x in modes if x not in SLOW}
+    m["explain"] = {x: MODES[x](m, prev, mt) for x in modes if x not in SLOW | SENDER_MODES}
     m["latency"] = round(time.time() - t0, 2)
     r["messages"].append(m)
     log(d["room"], "message", **m)
@@ -242,11 +240,11 @@ def submit():
                n_words=sum(len(m["orig"].split()) for m in round_msgs))
     r["results"].append(res)
     log(d["room"], "round_end", selection=sel, target=tgt, **res)
-    if len(r["results"]) < args.rounds:
-        r["round"] += 1
-        r["target"] = random.sample(range(len(r["figures"])), len(r["figures"]))
-        r["selection"] = []
-        r["round_start"] = time.time()
+    # no round limit: same figures, new order, for as long as the pair plays
+    r["round"] += 1
+    r["target"] = random.sample(range(len(r["figures"])), len(r["figures"]))
+    r["selection"] = []
+    r["round_start"] = time.time()
     return jsonify(res)
 
 
