@@ -9,7 +9,6 @@ middle, and ask what explanations of the translation actually help them.
 | folder | what it is |
 |---|---|
 | [`mt-game/`](mt-game/) | a two-player chat game, the **tangram figure task**, played through an MT model, with switchable explanations and a developer view. See its [README](mt-game/README.md) to run and play it. |
-| [`notes/`](notes/) | our working notes. Start with [thoughts.md](notes/thoughts.md): what we saw playing the game, and why explanations that only explain the MT miss the point. |
 
 ## Quick start
 
