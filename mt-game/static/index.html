@@ -66,6 +66,7 @@ input { flex:1; padding:8px; border:1px solid var(--line); border-radius:6px; ba
 .btn { padding:8px 14px; border:0; border-radius:6px; background:var(--accent); color:var(--panel); font:inherit; cursor:pointer; }
 .btn:disabled { opacity:.4; cursor:default; }
 #results { font-size:13px; color:var(--muted); }
+#error { color:var(--warn); font-size:13px; margin:6px 0; }
 </style>
 </head>
 <body>
@@ -74,7 +75,8 @@ input { flex:1; padding:8px; border:1px solid var(--line); border-radius:6px; ba
   <section class="panel" id="board"></section>
   <section class="panel" id="chat">
     <div id="log"></div>
-    <form id="f"><input id="t" autocomplete="off" placeholder="Type a message"><button class="btn">Send</button></form>
+    <div id="error" role="alert" hidden></div>
+    <form id="f"><input id="t" autocomplete="off" aria-label="Message" placeholder="Type a message"><button class="btn" id="send" disabled>Send</button></form>
   </section>
 </main>
 <script>
@@ -82,9 +84,17 @@ const q = new URLSearchParams(location.search);
 if (q.get("compact")) document.body.classList.add("compact");
 const room = q.get("room") || "tangram-figure", role = q.get("role") || "director", lang = q.get("lang") || "en";
 let S = null, lastMsgCount = -1, lastMsgKey = "", lastBoardKey = "", closedEx = new Set();
+let sending = false;
 
-const post = (u, b) => fetch(u, {method:"POST", headers:{"Content-Type":"application/json"},
-                                  body:JSON.stringify({room, role, ...b})}).then(r => r.json());
+const post = async (u, b) => {
+  const res = await fetch(u, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({room, role, ...b})});
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Request failed. Please try again.");
+  return data;
+};
+function showError(message="") {
+  const el = document.getElementById("error"); el.textContent = message; el.hidden = !message;
+}
 
 function esc(s) { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; }
 
@@ -115,7 +125,10 @@ function renderBoard() {
   b.querySelectorAll("[data-add]").forEach(e => e.onclick = () => setSel([...S.selection, +e.dataset.add]));
   b.querySelectorAll("[data-rm]").forEach(e => e.onclick = () => setSel(S.selection.filter((_, i) => i !== +e.dataset.rm)));
   const s = document.getElementById("submit");
-  if (s) s.onclick = async () => { await post("/api/submit", {}); poll(); };
+  if (s) s.onclick = async () => {
+    try { await post("/api/submit", {}); showError(); await poll(); }
+    catch (error) { showError(error.message); }
+  };
 }
 
 function resultsHtml() {
@@ -125,7 +138,11 @@ function resultsHtml() {
     `Round ${r.round}: ${r.correct}/${r.total} correct, ${r.seconds}s, ${r.n_messages} messages`).join("<br>") + "</div>";
 }
 
-async function setSel(sel) { S.selection = sel; renderBoard(); await post("/api/select", {selection: sel}); }
+async function setSel(sel) {
+  S.selection = sel; renderBoard();
+  try { await post("/api/select", {selection: sel}); }
+  catch (error) { showError(error.message); await poll(); }
+}
 
 function renderChat() {
   const log = document.getElementById("log");
@@ -133,15 +150,17 @@ function renderChat() {
   for (const m of S.messages) {
     if (m.round !== rnd) { rnd = m.round; h += `<div class="rnd">Round ${rnd}</div>`; }
     const ex = m.explain || {};
-    const body = ex.confidence ? confidenceHtml(ex.confidence) : esc(m.text);
+    const body = ex.confidence && ex.confidence.words.length ? confidenceHtml(ex.confidence) : esc(m.text);
     h += `<div class="m ${m.mine ? "mine" : "theirs"}" id="msg${m.id}">${body}` +
          (m.back != null ? `<div class="ex">Back-translation: ${esc(m.back)}</div>` : "") +
-         explainHtml(ex) + "</div>";
+         explainHtml(ex, m.translation_steps) + "</div>";
   }
   for (const p of S.pending || []) {
-    const what = p.stage === "translating"
+    let what = p.stage === "translating"
       ? (p.mine ? "Translating your message…" : "Your partner sent a message. Translating it…")
-      : (p.mine ? "Checking the translation (back-translation)…" : "Your partner sent a message. Almost ready…");
+      : p.stage === "back-translating" ? (p.mine ? "Checking the translation (back-translation)…" : "Your partner sent a message. Almost ready…")
+      : "Preparing translation explanations…";
+    if (p.stage === "translating" && p.total > 1) what += ` Step ${p.step} of ${p.total}.`;
     h += `<div class="m ${p.mine ? "mine" : "theirs"} pending">${p.mine ? esc(p.text) + "<div class='ex'>" + what + "</div>" : what}</div>`;
   }
   log.innerHTML = h;
@@ -164,12 +183,13 @@ function confidenceHtml(c) {
     ? `<span class="low" title="model confidence ${Math.round(p*100)}%">${esc(w)}</span>` : esc(w))).join("");
 }
 
-function explainHtml(ex) {
+function explainHtml(ex, steps=1) {
   let h = "";
+  const scope = steps > 1 ? " in the final translation step" : "";
   if (ex.confidence && ex.confidence.words.some(([, p]) => p < ex.confidence.threshold))
-    h += `<div class="ex">Underlined words: the translator was unsure.</div>`;
+    h += `<div class="ex">Underlined words: the translator was unsure${scope}.</div>`;
   if (ex.alternatives)
-    h += `<div class="ex">The translator also considered:<ul>${ex.alternatives.alts.map(a => `<li>${esc(a)}</li>`).join("")}</ul></div>`;
+    h += `<div class="ex">The translator also considered${scope}:<ul>${ex.alternatives.alts.map(a => `<li>${esc(a)}</li>`).join("")}</ul></div>`;
   if (ex.history)
     h += `<div class="ex">${ex.history.links.map(l => {
       const ref = `<button class="ref" data-ref="${l.msg_id}">round ${l.round}</button>`;
@@ -178,12 +198,12 @@ function explainHtml(ex) {
         : `Partner seems to be using your words from ${ref}: "${esc(l.yours)}"`;
     }).map(x => `<div>${x}</div>`).join("")}</div>`;
   if (ex.cot)
-    h += `<div class="ex"><details data-cot><summary>Translator's explanation${ex.cot.done ? "" : " (the translator is still writing it…)"}</summary><div class="cot">${esc(ex.cot.text) || "…"}</div></details></div>`;
+    h += `<div class="ex"><details data-cot><summary>Translator's explanation${steps > 1 ? " (final step)" : ""}${ex.cot.done ? "" : " (the translator is still writing it…)"}</summary><div class="cot">${esc(ex.cot.text) || "…"}</div></details></div>`;
   return h;
 }
 
 async function poll() {
-  const res = await fetch(`/api/state?room=${room}&role=${role}`);
+  const res = await fetch(`/api/state?${new URLSearchParams({room, role})}`);
   if (!res.ok) { document.getElementById("status").textContent = "This game was closed. Reload the page to rejoin."; return; }
   S = await res.json();
   document.getElementById("status").textContent =
@@ -191,18 +211,23 @@ async function poll() {
   const key = S.game + "|" + S.round + "|" + (role === "matcher" ? S.selection.join(",") : "") + "|" + S.results.length;
   if (key !== lastBoardKey) { lastBoardKey = key; renderBoard(); }
   // re-render on new messages and when a slow explanation streams in
-  const msgKey = JSON.stringify([S.messages.map(m => [m.id, m.explain && m.explain.cot && m.explain.cot.text.length]), S.pending]);
+  const msgKey = JSON.stringify([S.game, S.messages, S.pending]);
   if (msgKey !== lastMsgKey) { lastMsgKey = msgKey; renderChat(); }
+  document.getElementById("send").disabled = sending || !S.partner_joined || S.pending.some(p => p.mine);
 }
 
 document.getElementById("f").onsubmit = async e => {
   e.preventDefault();
-  const t = document.getElementById("t"); if (!t.value.trim()) return;
+  const t = document.getElementById("t"); if (!t.value.trim() || sending || document.getElementById("send").disabled) return;
   const v = t.value; t.value = "";
-  await post("/api/msg", {text: v}); poll();
+  sending = true; t.disabled = true; document.getElementById("send").disabled = true; showError();
+  try { await post("/api/msg", {text: v}); }
+  catch (error) { t.value = v; showError(error.message); }
+  finally { sending = false; t.disabled = false; t.focus(); await poll(); }
 };
 
-post("/api/join", {lang}).then(() => { poll(); setInterval(poll, 1000); });
+const safePoll = () => poll().catch(() => showError("Cannot reach the server. Check your connection."));
+post("/api/join", {lang}).then(() => { safePoll(); setInterval(safePoll, 1000); }).catch(error => showError(error.message));
 </script>
 </body>
 </html>

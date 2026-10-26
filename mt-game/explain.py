@@ -7,16 +7,16 @@ and a partner's reuse of your term comes back in different words. The modes
 below give the receiver evidence about what the partner actually wrote.
 
 Each mode: fn(m, room_msgs, mt) -> dict for the UI (or None), where m is the
-message being sent (orig, mt_input, shown, mt, src, tgt, from;
+message being sent (orig, mt_input, shown, mt, src, tgt, from, hops;
 mt_input differs from orig only when inject.py added an error) and room_msgs are earlier
 messages.
 
   none         - baseline
-  confidence   - highlight low-probability words in the translation
-  alternatives - other beam translations the model considered
+  confidence   - highlight low-probability words in the final translation step
+  alternatives - other beam translations considered in the final step
   history      - which earlier messages this one repeats or echoes, with a
                  stable gloss of each repeated phrase
-  cot          - the model's own explanation of its translation (seed-x/mock)
+  cot          - the model's explanation of the final translation step (seed-x/mock)
 """
 from translate import is_cjk, tokens
 
@@ -40,11 +40,14 @@ def cot(m, room_msgs, mt):
         raise ValueError("cot needs --model seed-x or mock")
     # slow, so the server runs it after the message is delivered; partial text
     # is written into the message as it streams in
+    final = m["hops"][-1]
+
     def update(text, done=False):
-        m["explain"]["cot"] = dict(text=text, done=done)
+        m["explain"]["cot"] = dict(text=text, done=done, src=final["src"],
+                                  tgt=final["tgt"], step=final["step"], total=len(m["hops"]))
 
     update("")
-    text = mt.explain(m["mt_input"], m["src"], m["tgt"], m["shown"], on_chunk=update)
+    text = mt.explain(final["input"], final["src"], final["tgt"], final["text"], on_chunk=update)
     update(text, done=True)
     return m["explain"]["cot"]
 

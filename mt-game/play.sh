@@ -6,6 +6,7 @@
 #   ./play.sh                # GPU 0, port 8000
 #   GPU=1 PORT=8001 ./play.sh
 #   SET=abstract ./play.sh   # tangram sets: classic, abstract (tangram_set.json)
+#   GPU=1 ./play.sh --via es,fr,de  # English -> Spanish -> French -> German -> Chinese
 #
 # Shared machine: check nvidia-smi first and pick a free GPU (Seed-X needs ~16GB).
 # The server listens on all of the machine's addresses; use the one for the
