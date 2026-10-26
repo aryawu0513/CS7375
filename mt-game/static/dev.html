@@ -16,8 +16,17 @@ body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 system-u
 header { padding:10px 16px; display:flex; flex-wrap:wrap; gap:12px; align-items:center; border-bottom:1px solid var(--line); }
 header h1 { font-size:16px; margin:0; font-weight:600; }
 header form { display:flex; gap:6px; align-items:center; }
-header select { padding:5px 7px; border:1px solid var(--line); border-radius:5px; background:var(--panel); color:var(--ink); font:inherit; }
+select { padding:5px 7px; border:1px solid var(--line); border-radius:5px; background:var(--panel); color:var(--ink); font:inherit; }
 .btn { padding:5px 12px; border:0; border-radius:5px; background:var(--accent); color:var(--panel); font:inherit; cursor:pointer; }
+.btn:disabled, button:disabled { opacity:.5; cursor:default; }
+button:focus-visible, select:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.relay { margin-top:12px; }
+.relay p { margin:6px 0; color:var(--muted); }
+.relay-row, .relay-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:8px 0; }
+.relay-row button, .secondary { border:1px solid var(--line); border-radius:5px; background:var(--panel); color:var(--ink); padding:4px 8px; cursor:pointer; }
+#relay-status.error { color:var(--bad); }
+#route-preview { color:var(--ink); }
+.hop { margin:8px 0; padding-left:10px; border-left:2px solid var(--line); }
 #cfg { color:var(--muted); font-size:13px; }
 .players { display:grid; grid-template-columns:1fr 1fr; gap:10px; padding:10px 16px; }
 @media (max-width: 1100px) { .players { grid-template-columns:1fr; } }
@@ -31,7 +40,8 @@ section { margin:0 16px 14px; background:var(--panel); border:1px solid var(--li
 .slot.ok { border:2px solid var(--ok); } .slot.bad { border:2px solid var(--bad); }
 .msg { border-top:1px solid var(--line); padding:8px 0; display:grid; grid-template-columns:150px 1fr; gap:2px 12px; }
 .msg:first-of-type { border-top:0; }
-.msg .meta { grid-row:span 9; font-size:12px; color:var(--muted); }
+.msg .meta { font-size:12px; color:var(--muted); }
+.msg .content { min-width:0; overflow-wrap:anywhere; }
 .msg .meta b { color:var(--ink); }
 .k { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; margin-top:4px; }
 .v { white-space:pre-wrap; }
@@ -54,6 +64,20 @@ details summary { cursor:pointer; color:var(--accent); }
     <button class="btn" type="submit">New game</button></form>
   <span id="cfg"></span>
 </header>
+<section class="relay" aria-labelledby="relay-title">
+  <h2 id="relay-title">Translation relay</h2>
+  <p>Each message passes through these languages in order before reaching the receiver. Replies use the reverse order.</p>
+  <form id="relay-form">
+    <div id="relay-steps"></div>
+    <div class="relay-actions">
+      <button class="secondary" id="add-step" type="button" disabled>Add language</button>
+      <button class="secondary" id="direct" type="button" disabled>Use direct translation</button>
+      <button class="btn" id="apply-relay" disabled>Apply relay</button>
+    </div>
+  </form>
+  <p id="route-preview"></p>
+  <p id="relay-status" role="status" aria-live="polite">Waiting for the players to join…</p>
+</section>
 <div class="players">
   <div class="player"><h2 id="dh">Director</h2><iframe id="di" title="Director view"></iframe></div>
   <div class="player"><h2 id="mh">Matcher</h2><iframe id="mi" title="Matcher view"></iframe></div>
@@ -66,12 +90,72 @@ details summary { cursor:pointer; color:var(--accent); }
 const q = new URLSearchParams(location.search);
 const room = q.get("room") || "tangram-figure", dl = q.get("dlang") || "en", ml = q.get("mlang") || "zh";
 const $ = id => document.getElementById(id);
+let languageNames = {}, maxVia = 8, viaDraft = null, savedVia = [], relayDirty = false, relaySaving = false;
+let playerLangs = {director: dl, matcher: ml};
 const opts = (items, cur) => items.map(([v, label]) =>
   `<option value="${esc(v)}"${v === cur ? " selected" : ""}>${esc(label)}</option>`).join("");
 fetch("/api/meta").then(r => r.json()).then(M => {
+  languageNames = M.langs; maxVia = M.max_via;
   const ls = Object.entries(M.langs).map(([c, n]) => [c, `${n} (${c})`]);
   $("dl").innerHTML = opts(ls, dl); $("ml").innerHTML = opts(ls, ml);
+  renderRelay();
 });
+function relayNotice(text, error=false) {
+  $("relay-status").textContent = text;
+  $("relay-status").classList.toggle("error", error);
+}
+function draftChanged() {
+  relayDirty = JSON.stringify(viaDraft) !== JSON.stringify(savedVia);
+  relayNotice(relayDirty ? "Unsaved changes. Apply to use this route for future messages." : "Relay unchanged.");
+  renderRelay();
+}
+function renderRelay() {
+  if (viaDraft === null || !Object.keys(languageNames).length) return;
+  $("relay-steps").innerHTML = viaDraft.length ? viaDraft.map((lang, i) => `
+    <div class="relay-row"><label for="via-${i}">Intermediate ${i+1}</label>
+      <select id="via-${i}" data-step="${i}" ${relaySaving ? "disabled" : ""}>${opts(Object.entries(languageNames), lang)}</select>
+      <button type="button" data-up="${i}" aria-label="Move language ${i+1} up" ${i === 0 || relaySaving ? "disabled" : ""}>↑</button>
+      <button type="button" data-down="${i}" aria-label="Move language ${i+1} down" ${i === viaDraft.length-1 || relaySaving ? "disabled" : ""}>↓</button>
+      <button type="button" data-remove="${i}" ${relaySaving ? "disabled" : ""}>Remove<span class="empty"> ${i+1}</span></button>
+    </div>`).join("") : `<p>Direct translation: no intermediate languages.</p>`;
+  const route = [playerLangs.director || dl, ...viaDraft, playerLangs.matcher || ml]
+    .filter((code, i, all) => i === 0 || code !== all[i-1]);
+  $("route-preview").textContent = `Director → matcher: ${route.map(c => languageNames[c] || c).join(" → ")} · ${Math.max(1, route.length-1)} translation step(s)`;
+  $("add-step").disabled = relaySaving || viaDraft.length >= maxVia;
+  $("direct").disabled = relaySaving || !viaDraft.length;
+  $("apply-relay").disabled = relaySaving || !relayDirty;
+}
+$("relay-steps").onchange = e => {
+  if (!e.target.matches("select[data-step]")) return;
+  viaDraft[+e.target.dataset.step] = e.target.value; draftChanged();
+};
+$("relay-steps").onclick = e => {
+  const b = e.target.closest("button"); if (!b || b.disabled) return;
+  if (b.dataset.remove !== undefined) viaDraft.splice(+b.dataset.remove, 1);
+  else {
+    const i = +(b.dataset.up ?? b.dataset.down), j = i + (b.dataset.up !== undefined ? -1 : 1);
+    [viaDraft[i], viaDraft[j]] = [viaDraft[j], viaDraft[i]];
+  }
+  draftChanged();
+};
+$("add-step").onclick = () => {
+  const candidates = ["es", "fr", "de", "ja", "ko", "zh", "en"];
+  viaDraft.push(candidates.find(c => !viaDraft.includes(c) && !Object.values(playerLangs).includes(c)) || "es");
+  draftChanged();
+};
+$("direct").onclick = () => { viaDraft = []; draftChanged(); };
+$("relay-form").onsubmit = async e => {
+  e.preventDefault(); relaySaving = true; renderRelay();
+  try {
+    const res = await fetch("/api/relay", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({room, via:viaDraft})});
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Could not update the relay.");
+    savedVia = [...data.via]; relayDirty = false;
+    relayNotice("Relay applied. Future messages use this route; earlier messages keep their original route.");
+    await poll();
+  } catch (error) { relayNotice(error.message, true); }
+  finally { relaySaving = false; renderRelay(); }
+};
 $("f").onsubmit = e => { e.preventDefault();
   location.search = new URLSearchParams({room, dlang: $("dl").value, mlang: $("ml").value}); };
 // picking a set starts a new game with it; "New game" restarts with the current set
@@ -81,7 +165,8 @@ $("rf").onsubmit = async e => {
   if (!confirm(`Start a new game with the "${$("set").value}" tangrams? Chat and scores are cleared (the log file keeps them).`)) {
     $("set").value = setNow; return;
   }
-  await fetch("/api/reset", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({room, set: $("set").value})});
+  const res = await fetch("/api/reset", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({room, set: $("set").value})});
+  if (!res.ok) { relayNotice((await res.json()).error, true); $("set").value = setNow; return; }
   figures = null; last = ""; $("di").contentWindow.location.reload(); $("mi").contentWindow.location.reload();
 };
 $("dh").textContent = `Director (${dl})`; $("mh").textContent = `Matcher (${ml})`;
@@ -107,7 +192,7 @@ function explainHtml(ex) {
   let h = "";
   for (const [mode, e] of Object.entries(ex || {})) {
     if (!e) { h += `<div class="empty">${mode}: (nothing)</div>`; continue; }
-    if (mode === "cot") h += `<details data-k="cot"><summary>translator's reasoning (CoT)${e.done ? "" : " (still writing…)"}</summary><div class="v">${esc(e.text)}</div></details>`;
+    if (mode === "cot") h += `<details data-k="cot"><summary>Translator's explanation${e.total > 1 ? ` (final step: ${esc(e.src)} → ${esc(e.tgt)})` : ""}${e.done ? "" : " (still writing…)"}</summary><div class="v">${esc(e.text)}</div></details>`;
     else if (mode === "confidence") h += `<div>confidence: ${e.words.map(([w, p]) =>
       p < e.threshold ? `<span class="low" title="${Math.round(p*100)}%">${esc(w)}</span>` : esc(w)).join(" ")}</div>`;
     else if (mode === "alternatives") h += `<div>alternatives: ${e.alts.map(esc).join(" | ")}</div>`;
@@ -121,14 +206,22 @@ function renderMsgs(D) {
   if (!D.messages.length) { $("msgs").innerHTML = `<span class="empty">No messages yet.</span>`; return; }
   $("msgs").innerHTML = D.messages.slice().reverse().map(m => {
     const inj = m.injected ? `<span class="badge">deliberate error: ${esc(m.injected[0])} → ${esc(m.injected[1])}</span>` : "";
+    const hops = m.hops || [];
     return `<div class="msg" data-id="${m.id}">
-      <div class="meta"><b>#${m.id}</b> · round ${m.round}<br>${m.from} ${m.src}→${m.tgt}<br>${m.latency ?? "?"}s</div>
+      <div class="meta"><b>#${m.id}</b> · game round ${m.round}<br>${m.from} ${m.src}→${m.tgt}<br>${m.latency ?? "?"}s<br>${hops.length} translation step(s)</div>
+      <div class="content">
       <div class="k">${m.from} typed</div><div class="v">${esc(m.orig)}</div>
       ${m.mt_input !== m.orig ? `<div class="k">MT input ${inj}</div><div class="v injected">${esc(m.mt_input)}</div>` : ""}
+      <div class="k">Translation route</div><div class="v">${(m.route || [m.src, m.tgt]).map(c => esc(languageNames[c] || c)).join(" → ")}</div>
+      <details data-k="hops"><summary>All translation steps</summary>${hops.map(h => `
+        <div class="hop"><div class="k">Step ${h.step}: ${esc(languageNames[h.src] || h.src)} → ${esc(languageNames[h.tgt] || h.tgt)} · ${h.latency}s</div>
+        <div class="k">Input</div><div class="v">${esc(h.input)}</div>
+        <div class="k">Output</div><div class="v">${esc(h.text)}</div></div>`).join("")}</details>
       <div class="k">receiver sees</div><div class="v">${esc(m.shown)}</div>
       ${m.back != null ? `<div class="k">sender's back-translation</div><div class="v">${esc(m.back)}</div>` : ""}
       ${m.alts && m.alts.length && !(m.explain || {}).alternatives ? `<div class="k">other beams (not shown)</div><div class="v">${m.alts.map(esc).join(" | ")}</div>` : ""}
-      <div class="k">receiver explanations</div><div>${explainHtml(m.explain)}</div>
+      <div class="k">receiver explanations${hops.length > 1 ? " (confidence, alternatives and explanation refer to the final step)" : ""}</div><div>${explainHtml(m.explain)}</div>
+      </div>
     </div>`;
   }).join("");
   // keep expanded <details> open across re-renders
@@ -146,9 +239,14 @@ async function poll() {
     const D = await dres.json();
     if (!figures) figures = (await fetch(`/api/state?room=${encodeURIComponent(room)}&role=director`).then(r => r.json())).figures;
     const c = D.config;
+    const relayChanged = viaDraft === null || JSON.stringify(savedVia) !== JSON.stringify(c.via) || JSON.stringify(playerLangs) !== JSON.stringify(D.langs);
+    savedVia = [...c.via]; playerLangs = D.langs;
+    if (!relayDirty) viaDraft = [...savedVia];
+    if (relayChanged) renderRelay();
+    if ($("relay-status").textContent === "Waiting for the players to join…") relayNotice("Choose intermediate languages, or keep direct translation as a baseline.");
     if (!$("set").options.length) $("set").innerHTML = D.sets.map(s => `<option${s === c.set ? " selected" : ""}>${s}</option>`).join("");
     setNow = c.set;
-    $("cfg").textContent = `set ${c.set} · model ${c.model} · explanations ${c.explain.join(", ") || "none"} · error rate ${c.error_rate} · round ${D.round}` +
+    $("cfg").textContent = `set ${c.set} · model ${c.model} · relay ${c.via.join(" → ") || "direct"} · explanations ${c.explain.join(", ") || "none"} · error rate ${c.error_rate} · round ${D.round}` +
       (D.results.length ? " · scores " + D.results.map(r => `${r.correct}/${r.total}`).join(", ") : "");
     const key = JSON.stringify(D);
     if (key === last) return;

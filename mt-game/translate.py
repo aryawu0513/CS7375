@@ -71,9 +71,11 @@ class _HFTranslator:
         import torch
 
         self.torch = torch
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.dtype = torch.bfloat16 if self.device.startswith("cuda") else torch.float32
-        self.lock = threading.Lock()
+        self.device = device or ("cuda" if torch.cuda.is_available() else
+                                 "mps" if torch.backends.mps.is_available() else "cpu")
+        self.dtype = (torch.bfloat16 if self.device.startswith("cuda") else
+                      torch.float16 if self.device.startswith("mps") else torch.float32)
+        self.lock = threading.RLock()
 
     def _generate(self, enc, num_alts, **kw):
         n = max(1, num_alts + 1)
@@ -120,10 +122,13 @@ class NLLBTranslator(_HFTranslator):
     def translate(self, text, src, tgt, num_alts=0):
         if src == tgt or not text.strip():
             return dict(text=text, words=[], alts=[])
-        self.tok.src_lang = LANGS[src][0]
-        enc = self.tok(text, return_tensors="pt").to(self.device)
-        bos = self.tok.convert_tokens_to_ids(LANGS[tgt][0])
-        return self._generate(enc, num_alts, forced_bos_token_id=bos)
+        # NLLB's tokenizer stores src_lang. Opposite-direction relays can
+        # interleave, so tokenization and generation share the model lock.
+        with self.lock:
+            self.tok.src_lang = LANGS[src][0]
+            enc = self.tok(text, return_tensors="pt").to(self.device)
+            bos = self.tok.convert_tokens_to_ids(LANGS[tgt][0])
+            return self._generate(enc, num_alts, forced_bos_token_id=bos)
 
 
 class SeedXTranslator(_HFTranslator):

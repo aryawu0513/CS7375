@@ -21,3 +21,9 @@ GPU=1 ./play.sh
 ```
 
 Then open the developer view to play both sides on one screen.
+
+To translate each message through several languages, run
+`GPU=1 ./play.sh --via es,fr,de`. With English and Chinese players, the
+message travels **English → Spanish → French → German → Chinese**;
+replies follow the reverse route. The developer view lets you edit the
+language chain and inspect every intermediate translation.
